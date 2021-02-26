@@ -1,0 +1,493 @@
+---
+title: "Time Series - Computer lab B"
+author: "group 6"
+date: "9/23/2019"
+output:
+  pdf_document: 
+    toc: TRUE
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "400px")
+library(astsa)
+library(kernlab)
+library(latex2exp)
+library(kableExtra)
+library(forecast)
+library(TSA)
+library(tseries)
+```
+
+\newpage
+
+# Assignment 1. Computations with simulated data
+
+## (a) AR(3) series
+
+The observations are from an AR(3) process
+$$x_t=0.8x_{t-1}-0.2x_{t-2}+0.1x_{t-3}+\epsilon_t,$$
+so there might exist some linear relationships among the nearest 2 observations. We assume two potential linear relationships
+$$x_{0}\sim x_{1}+x_{2}\quad and\quad x_{3}\sim x_{2}+x_{1}, $$
+and then calculate the correlation between the residuals of such two linear models.
+
+```{r}
+rm(list=ls())
+set.seed(12345)
+# the simulation of ar(3) process
+sim <- arima.sim(list(ar=c(0.8,-0.2,0.1)), n=1000)
+# create lag data.frame
+dat <-ts.intersect(x0=sim, x1=lag(sim,-1), x2=lag(sim,-2), 
+                   x3=lag(sim,-3), dframe = T)
+# create the potiential linear relation among nearby observations 
+res1 <- lm(x0~x1+x2, data=dat) 
+res2 <- lm(x3~x2+x1, data=dat)
+# the estimation of noise
+r1 <- residuals(res1)          
+r2 <- residuals(res2)
+cor(r1, r2)
+```
+
+The correlation between such residuals of linear regressions (or noise of estimations) is quite low and close to 0, which means such two residuals are nearly independent with each other. This must be true since the original time series $sim$ is from an AR(3) process, whose $\epsilon_t$ are i.i.d Gaussion distributed for any $t$.
+
+```{r}
+pacf(sim, lag.max = 33, main = "simulation of AR(3)")
+```
+
+The partial ACF decays (cuts off) around $lag=3$, which is the same as the definition with AR(3) process. It means that there is a positive autocorrelation among our simulation until $lag=3$ given by 3 lagged series. In acccordance with the partial ACF plot, AR parameter $\phi_{33}$ is invisble (close to 0), which means that series $x_{t-33}$ has no effect to $x_t$ if we remove all the relation of variables between $x_{t-33}$ and $x_t$.
+
+```{r}
+ARMAtoAR(c(0.8,-0.2,0.1), lag.max = 33)[33]
+```
+
+The parameter $\phi_{33}$ should equal 0 theoretically, which is the same as our conclusion from partial ACF plot.
+
+## (b) AR(2) series 
+
+```{r}
+# Simulate an AR(2) process
+set.seed(12345)
+ar_sim2 = arima.sim(model = list(ar = c(0.8, 0.1)), n = 100)
+
+# method of moments (Yule-Walker equations)
+yw = ar(ar_sim2, order = 2, 
+        method = c("yule-walker"),
+        aic = FALSE) 
+
+# - conditional least squares 
+cls = ar(ar_sim2, order = 2,
+        method = c("ols"),
+        aic = FALSE)
+# - maximum likelihood (MLE)
+ml = ar(ar_sim2, order = 2,
+        method = c("mle"),
+        aic = FALSE)
+
+# compare results to the true values
+# - true values are given
+matrix_a1_b = matrix(c(0.8,yw$ar[1],cls$ar[1],ml$ar[1],
+                     0.1,yw$ar[2],cls$ar[2],ml$ar[2]),
+                     ncol = 2, nrow = 4)
+
+df_a1_b = as.data.frame(matrix_a1_b,
+                        row.names = c("True",
+                                      "Yule-Walker",
+                                      "conditional least squares",
+                                      "maximum likelihood "),
+                        col.names = c("phi1", "phi2"))
+df_a1_b = round(df_a1_b,3)
+```
+```{r echo=FALSE}
+kable(df_a1_b) %>% 
+  kable_styling(latex_options="basic")
+```
+
+The best method is Yule-Walker method. It estiamtes the closest parameters to the true values. Afterward, to check whether the real value $\phi_2$ falls in the confidence interval for ML estimate, we need to compute the interval firstly. The asymptotic-theory variance matrix of the coefficient ML estimates is
+
+```{r echo=FALSE}
+# The asymptotic-theory variance matrix of the coefficient estimates
+name <- c("phi1", "phi2")
+mat <- as.data.frame(ml$asy.var.coef, row.names = name, col.names = name)
+kable(mat) %>% 
+  kable_styling(latex_options="basic")
+```
+
+We have the variance $\sigma^2$ of $\phi_2$ is 
+
+```{r echo=FALSE}
+va <- ml$asy.var.coef[2,2]
+va
+```
+
+so its standard deviation is 
+
+```{r echo=FALSE}
+sd <- sqrt(va)
+int <- 1.96*sd/sqrt(100)
+sd
+```
+
+If we choose the confidence level is $a=95%$, the confidence interval would be
+$$Z_{a/2}*\frac{\sigma}{\sqrt{n}}\approx 1.96*\frac{0.09525062}{\sqrt{100}}=0.01866912,$$
+and the confidence interval of $\phi_2$ from MLE is
+```{r echo=FALSE}
+cat(c(ml$ar[2]-int, ml$ar[2]+int))
+```
+
+Thus, the theoretical value for $\phi_2=0.1$ does not fall within confidence interval for ML estimate.
+
+## (c) Seasonal $ARIMA(0,0,1)\times(0,0,1)_12$
+
+The time series we need follows the seasonal MA model $ARIMA(0,0,1)\times(0,0,1)_{12}$. We can be rewritten it as a normal MA model $MA(13)$ as
+$$(1-\theta_1B )(1-\Theta_1 B^{12})w_t=(1-\theta_1B-\Theta_1B^{12}+\theta_1\Theta_1 B^{13})w_t\quad,$$
+and then simulate it by `arima.sim` function.
+
+```{r}
+set.seed(123456)
+# generate seasonal ARIMA(0,0,1)*(0,0,1)_12
+sim_1c <- arima.sim(list(order = c(0,0,13), ma = c(0.3,rep(0,10),0.6, 0.3*0.6)), n = 200)
+plot(sim_1c, type="l")
+```
+
+The sample ACF and PACF are plotted as below, the seasonality of $S=12$ is quite evident from both plots.
+
+```{r}
+p <- acf2(sim_1c, max.lag=14)
+```
+
+then we plot the theoretical ACF and PACF based on the paramters the question provides.
+
+```{r echo=FALSE}
+par(mfrow=c(2,1))
+plot(ARMAacf(ma = c(0.3,rep(0,9),0.6, 0.3*0.6), pacf=FALSE),
+     type="h",xlab="lag",ylab="ACF",main="Theoretical",); abline(h=0)
+plot(ARMAacf(ma = c(0.3,rep(0,9),0.6, 0.3*0.6), pacf=TRUE), 
+     type="h",xlab="lag",ylab="PACF"); abline(h=0)
+```
+
+In sample plots, the ACF cut off after both $lag=1$ and $lag=12$. The theoretical plots are kindly repeated at the sample ACF and PACF, but the paths are much smoother and the PACF has a positive relation at $lag=11$.
+\newpage
+
+## (d) Comparison with `gausspr`
+
+To simplify, we use the series from question (c) here. Firstly, we fit such series by `sarima` function.
+
+```{r}
+fit <- sarima(sim_1c, p=0, d=0, q=1, Q=1, S=12)
+```
+
+The fitting model works very well. All the p-values are large and points on Q-Q plot are close to the stright line. Then we use `sarima.for` to forecast 30 new points and its predicted band.
+
+```{r}
+sarima.for(sim_1c, 30, 0, 0, 1, Q=1, S=12)
+```
+
+As we can see, the firstly 12 predicted points seem to be good and follow the previous pattern. But the remaining 18 points become 0 very quickly. We use another function `gausspr` with default parameters to fit and forecast data.
+
+```{r message=FALSE}
+fit2 <- gausspr(x=1:200, y=sim_1c)
+plot(1:200, sim_1c, type="l", xlim=c(1,230))
+lines(x=1:230, y=predict(fit2, 1:230)[,1], col = "steelblue", lwd=2)
+```
+
+It seems that such model can predict the trend of data well, but it almost ignores the seasonality of such series.
+
+\newpage
+## (e) ARMA(1,1)
+
+```{r}
+set.seed(12345)
+sim_1e <- arima.sim(list(ar=0.7, ma=0.5), 50)
+
+sample <- sim_1e[1:40]
+fit40  <- auto.arima(sample, max.p = 1, max.q = 1, 
+                    allowmean = TRUE)      # zero-mean
+fore <- forecast(fit40, 10)
+plot(fore)
+lines(sim_1e,type="b")
+```
+
+```{r echo=FALSE}
+dt <- cbind(sim_1e[41:50], fore$lower[,2], fore$upper[,2])
+out <- 0
+for(i in 1:10){
+  if(!dt[i,1]>dt[i,2]&&dt[i,1]<dt[i,3]){
+    out <- out+1
+  }
+}
+cat("Number of points outsides the 95% prediction interval:",out,"\n")
+```
+
+Although the locations of 10 predicted points are very wired, but the 95% prediction band (the grey area) follows the pattern of previous data well. In additionally, there is only one actual point outsides such prediction interval. 
+
+\newpage
+
+
+# Assignment 2. ACF and PACF diagnostics.
+```{r}
+set.seed(12345)
+rm(list = ls())
+```
+
+## a) Model selection - chicken data
+
+*For data series chicken in package astsa (denote it by ($x_t$) plot 4 following graphs up to 40 lags: ACF($x_t$), PACF($x_t$) ACF($\nabla x_t$), PACF($\nabla x_t$), (group them in one graph). Which $ARIMA(p,d,q)$ or $ARIMA(p,d,q)\times(P,D,Q)_{S}$ models can be suggested based on this information only? Motivate your choice.*
+
+In this part of the task I created a function that creates the different visualizations. The function can be seen in the appendix. The output of this function are 2 ACF and 2 PACF plots. The visualization in the upper left part is the ACF plot in the lower left lagged ACF. In the upper right part is the PACF and in the lower right part the lagged PACF plot. In the task it is given to use up to 40.
+
+```{r, echo=FALSE}
+# get all the data
+# chicken, so2, EQcount, HCT
+data(chicken)
+data(so2)
+data(EQcount)
+data(HCT)
+
+plot_function = function(data,lag_dif){
+  # data: the data - as time series object
+  # lag_dif: the lag difference
+  par(mfrow = c(2,2))
+  
+  # not lagged data
+  acf_obj = acf(data)
+  pacf_obj = pacf(data)
+  
+  # the lagged data
+  acf_obj_lag = acf(diff(data), lag.max = lag_dif)
+  pacf_obj_lag = pacf(diff(data), lag.max = lag_dif)
+  
+}
+
+```
+
+- Data: **chicken**
+
+```{r, echo=T}
+plot(chicken, main = "Chicken price")
+
+plot_function(chicken, 40)
+```
+
+
+In the upper right and left part are the not lagged plots. 
+The ACF value decreases only slightly, whereas the PACF after the first lay falls into the area with the blue line. From this it can be concluded that an AR(1) or an ARIMA(1,0,0) model could be appropriate. 
+
+In the lower part of the plot a season patter can be seen in the ACF, where s=12.
+
+
+
+## b) Model selection - different data
+
+*Repeat step 1 for the following datasets: so2, EQcount, HCT in package `astsa`.*
+
+- Data: **so2**
+
+```{r, echo=F}
+plot(so2, main = "Sulfur dioxide levels")
+```
+
+```{r echo=F}
+plot_function(so2, 40)
+
+```
+
+
+If you look at the time series, as well as the ACF and PACF, it's not easy to say what a model could look like. However, ACF and PACF plots show tailing off rather than any cut-off point. However, if we look at the differencing term, i.e. the lower part of the plot, we see that ACF cuts off after lagged 1. The differencing PACF tails of, so I would suggest an ARMA(0,1,1) model. 
+
+
+- Data: **EQcount**
+
+```{r, echo=F}
+plot(EQcount, main = "Aannual counts of major earthquakes")
+```
+
+```{r echo=F}
+plot_function(EQcount, 40)
+```
+
+
+In the upper part of the visualization it can be seen that the ACF value is in the blue range after 8 lags, a slow reduction can be observed. With the PACF, however, the value after the first dropped was in the blue range. Accordingly I would recommend here again for an AR(1) or ARMA(1,0,0) as model. 
+
+In the lower part of the visualization you can almost see the opposite of the upper part. The ACF value drops off after one lag and the PACF value is in the blue area after some lag. Accordingly, an ARIMA model(0,0,1) could also be considered.
+
+
+
+- Data: **HCT**
+
+```{r, echo=F}
+
+plot(HCT, main = "Hematocrit Levels")
+```
+
+```{r echo=F}
+plot_function(HCT, 40)
+```
+
+In the upper part of the plot we can say that the ACF plot shows a season with s=7. The PACF part cuts of with lag 7, therefor we could say that the non-seasonal part may be AR(7) or ARIMA(7,0,0). 
+
+
+
+
+
+\newpage
+# Assignment 3. ARIMA modeling cycle
+
+## (a)
+
+`Visualization`
+
+```{r echo=F}
+set.seed(12345)
+rm(list = ls())
+
+data(oil)
+data <- oil
+# original 
+plot(data, main = "Oil Price")
+```
+```{r}
+### transform 
+# log for narrow the variance
+# diff for stationary removal
+data_diff = diff(log(data))
+plot(data_diff,  main = "Oil Price logged & difference") 
+# looks stationary
+```
+
+There is an obvious trend in the original oil data, we use logarithm transformation firstly to narrow the variance of data. Then we apply one-order difference to the data and get a stationary-like time series.
+
+`Hypothesis test`
+
+```{r echo=F}
+# unit root test
+adf.test(data_diff)
+# Box-Ljung test
+Box.test(data_diff, type="Ljung-Box")
+```
+
+In *Box-Ljung* test, we reject the null hyperthsis, which means that the series is not independence. In *unit root* test, it asks us to accept its alternative hypothesis, which says the series is stationary.
+
+`Plot analysis`
+
+```{r echo=F}
+# Q-Q plots
+qqnorm(data_diff, pch = 1, frame = FALSE)
+qqline(data_diff, col = "steelblue", lwd = 2)
+```
+
+The Q-Q plot shows that the sample p-value is significantly lower than the expected p-value in the beginning, but higer in the end. In general, sample and theoretical quantiles follow similar distributions, since most of the points are on the stright line. But the sample quantiles seem more dispersed because of such "S-shape".
+
+```{r echo=F}
+# ACF and PACF plots: acf2
+p <- acf2(as.numeric(data_diff))
+
+# EACF analysis
+# choose a circle locating on dignal
+# The model should be as simple as it can be
+eacf(data_diff, ma.max = 6) 
+```
+
+Both ACF and PACF plots tail off when lag is larger, which means the series might follow an ARMA model. By EACF, we can assume our logged and diffed series follow either ARMA(1,1) or ARMA(3,3).
+
+`Fitting`
+
+```{r echo=F}
+# ARIMA fit analysis 
+# model 1 & 2
+fit1 = arima(x = data_diff, c(3,0,3))
+fit2 = arima(x = data_diff, c(1,0,1))
+
+hist(fit1$residuals, breaks=30)
+rug(fit1$residuals)
+```
+```{r echo=F}
+hist(fit2$residuals, breaks=30)
+rug(fit2$residuals)
+```
+
+Since the results from such two fitting models are quite similar, we choose the simpler model as the best fitting, which means that our logged series follow ARIMA(1,1,1).
+
+`Forecast`
+
+```{R echo=F}
+###### choose one of the model
+best_fit <- arima(x=data_diff, c(1,0,1))
+
+# predictions
+fore <- forecast(data_diff, 20, model=best_fit)
+plot(fore,xlim=c(2005, 2011))
+```
+
+\newpage
+
+## (b)
+
+```{r echo=F}
+rm(list=ls())
+data(unemp)
+data = unemp
+
+### visualisation of original plot
+plot(data, main = "original unemp") 
+```
+
+The original `unemp` data is non-stationary obviously. We use log transposition and `decompose` to check the seasonality of such series.
+
+```{r echo=F}
+### transform -- log
+data_log <- log(data)
+# evidently seasonal
+plot(decompose(data_log))
+```
+```{r echo=F}
+p <- acf2(data_log)
+```
+
+It seems the seasonality $S=12$, and $P=1$, $Q=0$. thus we try the first difference with $lag=12$ to remove its seasonal trend.
+
+```{r echo=F}
+data_log_diff = diff(data_log, lag = 12)
+plot(data_log_diff, main="remove seasonality")
+```
+```{r echo=F}
+p <- acf2(data_log_diff)
+```
+```{r echo=F}
+# Q-Q plot
+qqnorm(data_log_diff, pch = 1, frame = FALSE)
+qqline(data_log_diff, col = "steelblue", lwd = 2)
+# unit root test
+adf.test(data_log_diff)
+# Box-Ljung test
+Box.test(data_log_diff, type="Ljung-Box")
+```
+
+The detrending works well and two tests shows that our logged diffed series is dependent and statioanry. Since both PACF and ACF tails off, we assume such series follows ARIMA(p,0,q) model. Thus, we apply `eacf` to our series.
+
+```{r echo=F}
+eacf(data_log_diff)
+```
+
+Assume our model is either ARIMA(3,0,1) or ARIMA(2,0,2). The fitting results are shown as follow.
+
+```{r echo=FALSE}
+# fit
+fit1 <- sarima(data_log_diff,p=3,d=0,q=1,P=1,S=12,details = FALSE)
+fit2 <- sarima(data_log_diff,p=2,d=0,q=1,P=1,S=12,details = FALSE)
+fit1$fit
+fit2$fit  # bigger log-llk, smaller aic
+```
+
+The fitting with $ARIMA(3,0,1)\times(1,0,0)_{12}$ (the first fitting) has smaller AIC and larger log lokelihood. Based on these fitting, the final prediction is
+
+````{R echo=F}
+sarima.for(data_log_diff, 20,3,0,1,1,0,0,12)
+```
+
+
+
+\newpage
+# Appendix
+
+```{r ref.label=knitr::all_labels(), echo = T, eval = F}
+```
+
